@@ -26,7 +26,17 @@ export type CachedChunk = {
   size: number;
 };
 
+export type PrefetchJob = {
+  itemId: number;
+  url: string;
+  status: 'queued' | 'running' | 'completed' | 'failed';
+  createdAt: number;
+  updatedAt: number;
+  lastError?: string;
+};
+
 type CacheItemRow = Omit<CacheItem, 'completed'> & { completed: 0 | 1 };
+type PrefetchJobRow = Omit<PrefetchJob, 'lastError'> & { last_error?: string };
 
 export class CacheStore {
   private db: Database.Database;
@@ -61,6 +71,16 @@ export class CacheStore {
         FOREIGN KEY (item_id) REFERENCES cache_items(id) ON DELETE CASCADE
       );
       CREATE INDEX IF NOT EXISTS idx_cache_items_accessed ON cache_items(last_accessed_at);
+      CREATE TABLE IF NOT EXISTS prefetch_jobs (
+        item_id INTEGER PRIMARY KEY,
+        url TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        last_error TEXT,
+        FOREIGN KEY (item_id) REFERENCES cache_items(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_prefetch_jobs_status ON prefetch_jobs(status);
     `);
   }
 
@@ -160,6 +180,37 @@ export class CacheStore {
 
   deleteItem(id: number): void {
     this.db.prepare('DELETE FROM cache_items WHERE id = ? AND active_streams = 0').run(id);
+  }
+
+  upsertPrefetchJob(itemId: number, url: string): void {
+    const now = Date.now();
+    this.db.prepare(`
+      INSERT INTO prefetch_jobs (item_id, url, status, created_at, updated_at)
+      VALUES (?, ?, 'queued', ?, ?)
+      ON CONFLICT(item_id) DO UPDATE SET
+        url = excluded.url,
+        status = CASE WHEN prefetch_jobs.status = 'completed' THEN 'completed' ELSE 'queued' END,
+        updated_at = excluded.updated_at,
+        last_error = NULL
+    `).run(itemId, url, now, now);
+  }
+
+  updatePrefetchJob(itemId: number, status: PrefetchJob['status'], lastError?: string): void {
+    this.db.prepare('UPDATE prefetch_jobs SET status = ?, updated_at = ?, last_error = ? WHERE item_id = ?').run(status, Date.now(), lastError ?? null, itemId);
+  }
+
+  listPrefetchJobs(statuses?: PrefetchJob['status'][]): PrefetchJob[] {
+    const rows = statuses?.length
+      ? this.db.prepare(`SELECT item_id as itemId, url, status, created_at as createdAt, updated_at as updatedAt, last_error FROM prefetch_jobs WHERE status IN (${statuses.map(() => '?').join(',')}) ORDER BY updated_at ASC`).all(...statuses) as PrefetchJobRow[]
+      : this.db.prepare('SELECT item_id as itemId, url, status, created_at as createdAt, updated_at as updatedAt, last_error FROM prefetch_jobs ORDER BY updated_at DESC').all() as PrefetchJobRow[];
+    return rows.map((row) => ({
+      itemId: row.itemId,
+      url: row.url,
+      status: row.status,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+      lastError: row.last_error ?? undefined
+    }));
   }
 
   close(): void {

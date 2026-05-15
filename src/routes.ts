@@ -55,11 +55,15 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
     }))
   );
 
+  server.get('/cache/prefetch/jobs', async () => store.listPrefetchJobs());
+
   server.post('/cache/cleanup', async () => streamProxy.cleanup());
 
   server.addHook('onClose', async () => {
+    await streamProxy.drainPrefetchJobs();
     store.close();
   });
 
+  streamProxy.resumePrefetchJobs(server.log);
   return server;
 }

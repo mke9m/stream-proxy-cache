@@ -23,6 +23,8 @@ type UpstreamMetadata = {
   lastModified?: string;
 };
 
+type LoggerLike = Pick<FastifyRequest['log'], 'warn' | 'debug'>;
+
 const redirectDispatchers = new Map<number, Dispatcher.ComposedDispatcher>();
 
 export class StreamProxy {
@@ -108,7 +110,7 @@ export class StreamProxy {
       const source = this.shouldCache(freshItem)
         ? this.streamRange(freshItem, normalizedUrl, resolved, request)
         : this.streamDirect(normalizedUrl, resolved, request);
-      this.startPrefetch(freshItem, normalizedUrl, resolved.start, request);
+      this.startPrefetch(freshItem, normalizedUrl, resolved.start, request.log);
       const stream = Readable.from(this.streamWithAccounting(freshItem.id, source, request));
       return reply.send(stream);
     } catch (error) {
@@ -121,6 +123,19 @@ export class StreamProxy {
     const before = this.store.listItems().length;
     await this.fileCache.enforceMaxSize(0);
     return { removed: before - this.store.listItems().length };
+  }
+
+  resumePrefetchJobs(logger: LoggerLike): void {
+    if (!this.config.prefetchEnabled) return;
+    for (const job of this.store.listPrefetchJobs(['queued', 'running', 'failed'])) {
+      const item = this.store.getById(job.itemId);
+      if (!item || item.completed || item.contentLength === undefined) continue;
+      this.startPrefetch(item, job.url, 0, logger);
+    }
+  }
+
+  async drainPrefetchJobs(): Promise<void> {
+    await Promise.allSettled(this.prefetchJobs.values());
   }
 
   private async prepareMetadata(item: CacheItem, upstreamUrl: string, request: FastifyRequest): Promise<CacheItem> {
@@ -406,21 +421,27 @@ export class StreamProxy {
     return true;
   }
 
-  private startPrefetch(item: CacheItem, upstreamUrl: string, startByte: number, request: FastifyRequest): void {
+  private startPrefetch(item: CacheItem, upstreamUrl: string, startByte: number, logger: LoggerLike): void {
     if (!this.config.prefetchEnabled || !this.shouldCache(item) || item.contentLength === undefined) return;
     if (this.prefetchJobs.has(item.id)) return;
+    this.store.upsertPrefetchJob(item.id, upstreamUrl);
 
-    const job = this.prefetchMissingChunks(item, upstreamUrl, startByte, request)
-      .catch((error) => request.log.warn({ err: error, url: redactUrl(upstreamUrl) }, 'Background prefetch failed'))
+    const job = this.prefetchMissingChunks(item, upstreamUrl, startByte, logger)
+      .then(() => this.store.updatePrefetchJob(item.id, 'completed'))
+      .catch((error) => {
+        this.store.updatePrefetchJob(item.id, 'failed', error instanceof Error ? error.message : String(error));
+        logger.warn({ err: error, url: redactUrl(upstreamUrl) }, 'Background prefetch failed');
+      })
       .finally(() => this.prefetchJobs.delete(item.id));
     this.prefetchJobs.set(item.id, job);
   }
 
-  private async prefetchMissingChunks(item: CacheItem, upstreamUrl: string, startByte: number, request: FastifyRequest): Promise<void> {
+  private async prefetchMissingChunks(item: CacheItem, upstreamUrl: string, startByte: number, logger: LoggerLike): Promise<void> {
     const contentLength = item.contentLength;
     if (contentLength === undefined) return;
+    this.store.updatePrefetchJob(item.id, 'running');
 
-    const firstChunk = Math.floor(startByte / this.config.chunkSizeBytes) + this.config.prefetchStartAheadChunks;
+    const firstChunk = Math.floor(startByte / this.config.chunkSizeBytes);
     const maxEnd = this.config.prefetchMaxBytes === undefined
       ? contentLength - 1
       : Math.min(contentLength - 1, startByte + this.config.prefetchMaxBytes - 1);
@@ -432,7 +453,7 @@ export class StreamProxy {
         const chunkIndex = nextChunk;
         nextChunk += 1;
         if (this.fileCache.hasChunk(item, chunkIndex)) continue;
-        await this.prefetchChunk(item, upstreamUrl, chunkIndex, request);
+        await this.prefetchChunk(item, upstreamUrl, chunkIndex, logger);
       }
     };
 
@@ -441,7 +462,7 @@ export class StreamProxy {
     );
   }
 
-  private async prefetchChunk(item: CacheItem, upstreamUrl: string, chunkIndex: number, fastifyRequest: FastifyRequest): Promise<void> {
+  private async prefetchChunk(item: CacheItem, upstreamUrl: string, chunkIndex: number, logger: LoggerLike): Promise<void> {
     if (this.fileCache.hasChunk(item, chunkIndex)) return;
     const key = `${item.id}:${chunkIndex}`;
     const existing = this.inflightChunks.get(key);
@@ -487,8 +508,9 @@ export class StreamProxy {
       await rename(tempPath, path);
       this.fileCache.recordChunk(item, chunkIndex, written);
     } catch (error) {
-      fastifyRequest.log.warn({ err: error, url: redactUrl(upstreamUrl), chunkIndex }, 'Prefetch chunk failed');
+      logger.warn({ err: error, url: redactUrl(upstreamUrl), chunkIndex }, 'Prefetch chunk failed');
       await rm(tempPath, { force: true });
+      throw error;
     } finally {
       if (!file.closed && !file.destroyed) {
         file.destroy();

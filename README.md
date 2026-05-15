@@ -93,6 +93,7 @@ Stats and items:
 ```bash
 curl http://127.0.0.1:3000/cache/stats
 curl http://127.0.0.1:3000/cache/items
+curl http://127.0.0.1:3000/cache/prefetch/jobs
 curl -X POST http://127.0.0.1:3000/cache/cleanup
 ```
 
@@ -215,4 +216,10 @@ PREFETCH_START_AHEAD_CHUNKS=1
 PREFETCH_MAX_BYTES=
 ```
 
-With this enabled, starting a stream begins background downloads of missing chunks ahead of the current playback position. Leaving `PREFETCH_MAX_BYTES` empty allows prefetch to continue toward the end of the file. Be careful with disk space: a single 100 GB movie can become a 100 GB cache item if playback starts and prefetch is allowed to finish.
+With this enabled, starting a stream creates a persistent prefetch job and begins background downloads of missing chunks. Leaving `PREFETCH_MAX_BYTES` empty allows prefetch to continue toward the end of the file, even if the player pauses, seeks, or closes the playback request. Already completed chunks survive restarts; unfinished jobs are resumed when the service starts again. Be careful with disk space: a single 100 GB movie can become a 100 GB cache item if prefetch is allowed to finish.
+
+Check download jobs:
+
+```bash
+curl http://127.0.0.1:3000/cache/prefetch/jobs
+```
