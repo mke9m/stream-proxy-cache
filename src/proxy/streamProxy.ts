@@ -217,12 +217,14 @@ export class StreamProxy {
   }
 
   private async *streamDirect(upstreamUrl: string, range: ByteRange, request: FastifyRequest): AsyncGenerator<Buffer> {
-    const response = await requestUpstream(upstreamUrl, {
+    const response = await requestUpstreamForPlayback(upstreamUrl, {
       method: 'GET',
       range,
       timeoutMs: this.config.requestTimeoutMs,
-      maxRedirections: this.config.maxUpstreamRedirects
-    });
+      maxRedirections: this.config.maxUpstreamRedirects,
+      retries: this.config.upstream429Retries,
+      retryDelayMs: this.config.upstream429RetryMs
+    }, request.log);
     if (![200, 206].includes(response.statusCode)) {
       throw new Error(`Unexpected upstream status ${response.statusCode}`);
     }
@@ -235,12 +237,14 @@ export class StreamProxy {
   }
 
   private async *streamDirectOpen(upstreamUrl: string, start: number, request: FastifyRequest): AsyncGenerator<Buffer> {
-    const response = await requestUpstream(upstreamUrl, {
+    const response = await requestUpstreamForPlayback(upstreamUrl, {
       method: 'GET',
       range: start > 0 ? { start } : undefined,
       timeoutMs: this.config.requestTimeoutMs,
-      maxRedirections: this.config.maxUpstreamRedirects
-    });
+      maxRedirections: this.config.maxUpstreamRedirects,
+      retries: this.config.upstream429Retries,
+      retryDelayMs: this.config.upstream429RetryMs
+    }, request.log);
     if (![200, 206].includes(response.statusCode)) {
       throw new Error(`Unexpected upstream status ${response.statusCode}`);
     }
@@ -275,12 +279,14 @@ export class StreamProxy {
     );
 
     try {
-      const response = await requestUpstream(upstreamUrl, {
+      const response = await requestUpstreamForPlayback(upstreamUrl, {
         method: 'GET',
         range: bounds,
         timeoutMs: this.config.requestTimeoutMs,
-        maxRedirections: this.config.maxUpstreamRedirects
-      });
+        maxRedirections: this.config.maxUpstreamRedirects,
+        retries: this.config.upstream429Retries,
+        retryDelayMs: this.config.upstream429RetryMs
+      }, fastifyRequest.log);
       if (![200, 206].includes(response.statusCode)) {
         throw new Error(`Unexpected upstream status ${response.statusCode}`);
       }
@@ -327,12 +333,14 @@ export class StreamProxy {
   ): AsyncGenerator<Buffer> {
     const firstBounds = this.fileCache.chunkBounds(firstChunkIndex, item.contentLength);
     const upstreamRange = { start: firstBounds.start, end: clientRange.end };
-    const response = await requestUpstream(upstreamUrl, {
+    const response = await requestUpstreamForPlayback(upstreamUrl, {
       method: 'GET',
       range: upstreamRange,
       timeoutMs: this.config.requestTimeoutMs,
-      maxRedirections: this.config.maxUpstreamRedirects
-    });
+      maxRedirections: this.config.maxUpstreamRedirects,
+      retries: this.config.upstream429Retries,
+      retryDelayMs: this.config.upstream429RetryMs
+    }, fastifyRequest.log);
     if (![200, 206].includes(response.statusCode)) {
       throw new Error(`Unexpected upstream status ${response.statusCode}`);
     }
@@ -560,6 +568,28 @@ async function requestUpstream(
   });
 }
 
+async function requestUpstreamForPlayback(
+  url: string,
+  options: { method: 'GET'; range?: { start: number; end?: number }; timeoutMs: number; maxRedirections: number; retries: number; retryDelayMs: number },
+  logger: LoggerLike
+) {
+  for (let attempt = 0; attempt <= options.retries; attempt += 1) {
+    const response = await requestUpstream(url, options);
+    if (response.statusCode !== 429) return response;
+
+    await discardBody(response.body);
+    if (attempt >= options.retries) return response;
+
+    logger.warn(
+      { url: redactUrl(url), attempt: attempt + 1, retryDelayMs: options.retryDelayMs },
+      'Upstream returned 429 during playback; retrying'
+    );
+    await sleep(options.retryDelayMs);
+  }
+
+  return requestUpstream(url, options);
+}
+
 function redirectDispatcher(maxRedirections: number): Dispatcher.ComposedDispatcher {
   const normalized = Math.max(0, maxRedirections);
   const existing = redirectDispatchers.get(normalized);
@@ -591,4 +621,8 @@ async function discardBody(body: { dump: (opts?: { limit: number }) => Promise<v
   } catch {
     // Best-effort cleanup for metadata probes.
   }
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }

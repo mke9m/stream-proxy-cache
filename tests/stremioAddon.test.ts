@@ -61,6 +61,8 @@ describe('Stremio addon wrapper', () => {
       rateLimitMax: 1000,
       rateLimitWindow: '1 minute',
       requestTimeoutMs: 5000,
+      upstream429Retries: 1,
+      upstream429RetryMs: 10,
       maxUpstreamRedirects: 0,
       trustProxy: false,
       logLevel: 'silent',

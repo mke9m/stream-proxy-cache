@@ -56,6 +56,8 @@ Copy `.env.example` to `.env` and adjust:
 | `RATE_LIMIT_MAX` | `120` | Requests per rate window |
 | `RATE_LIMIT_WINDOW` | `1 minute` | Fastify rate-limit window |
 | `REQUEST_TIMEOUT_MS` | `120000` | Upstream inactivity timeout |
+| `UPSTREAM_429_RETRIES` | `6` | Playback retries when upstream rate-limits with HTTP 429 |
+| `UPSTREAM_429_RETRY_MS` | `5000` | Delay between playback 429 retries |
 | `MAX_UPSTREAM_REDIRECTS` | `3` | Redirect limit |
 | `MIN_CACHEABLE_BYTES` | empty | Stream without caching when content is smaller |
 | `MAX_CACHEABLE_BYTES` | empty | Stream without caching when content is larger |
@@ -216,6 +218,8 @@ PREFETCH_CONCURRENCY=1
 PREFETCH_START_AHEAD_CHUNKS=1
 PREFETCH_MAX_BYTES=
 PREFETCH_RETRY_AFTER_MS=600000
+UPSTREAM_429_RETRIES=6
+UPSTREAM_429_RETRY_MS=5000
 ```
 
 With this enabled, starting a stream creates a persistent prefetch job and begins background downloads of missing chunks. Leaving `PREFETCH_MAX_BYTES` empty allows prefetch to continue toward the end of the file, even if the player pauses, seeks, or closes the playback request. Already completed chunks survive restarts; unfinished jobs are resumed when the service starts again. Be careful with disk space: a single 100 GB movie can become a 100 GB cache item if prefetch is allowed to finish.

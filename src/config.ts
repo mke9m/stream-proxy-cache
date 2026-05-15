@@ -23,6 +23,8 @@ const envSchema = z.object({
   RATE_LIMIT_MAX: z.coerce.number().int().positive().default(120),
   RATE_LIMIT_WINDOW: z.string().default('1 minute'),
   REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(120_000),
+  UPSTREAM_429_RETRIES: z.coerce.number().int().min(0).default(6),
+  UPSTREAM_429_RETRY_MS: z.coerce.number().int().positive().default(5000),
   MAX_UPSTREAM_REDIRECTS: z.coerce.number().int().min(0).default(3),
   MIN_CACHEABLE_BYTES: optionalInt,
   MAX_CACHEABLE_BYTES: optionalInt,
@@ -54,6 +56,8 @@ export type AppConfig = {
   rateLimitMax: number;
   rateLimitWindow: string;
   requestTimeoutMs: number;
+  upstream429Retries: number;
+  upstream429RetryMs: number;
   maxUpstreamRedirects: number;
   minCacheableBytes?: number;
   maxCacheableBytes?: number;
@@ -84,6 +88,8 @@ export const config: AppConfig = {
   rateLimitMax: env.RATE_LIMIT_MAX,
   rateLimitWindow: env.RATE_LIMIT_WINDOW,
   requestTimeoutMs: env.REQUEST_TIMEOUT_MS,
+  upstream429Retries: env.UPSTREAM_429_RETRIES,
+  upstream429RetryMs: env.UPSTREAM_429_RETRY_MS,
   maxUpstreamRedirects: env.MAX_UPSTREAM_REDIRECTS,
   minCacheableBytes: env.MIN_CACHEABLE_BYTES,
   maxCacheableBytes: env.MAX_CACHEABLE_BYTES,
