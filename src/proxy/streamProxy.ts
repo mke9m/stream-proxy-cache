@@ -424,6 +424,11 @@ export class StreamProxy {
   private startPrefetch(item: CacheItem, upstreamUrl: string, startByte: number, logger: LoggerLike): void {
     if (!this.config.prefetchEnabled || !this.shouldCache(item) || item.contentLength === undefined) return;
     if (this.prefetchJobs.has(item.id)) return;
+    const existingJob = this.store.getPrefetchJob(item.id);
+    if (existingJob?.status === 'failed' && Date.now() - existingJob.updatedAt < this.config.prefetchRetryAfterMs) {
+      logger.debug({ itemId: item.id, retryAfterMs: this.config.prefetchRetryAfterMs }, 'Skipping prefetch during retry cooldown');
+      return;
+    }
     this.store.upsertPrefetchJob(item.id, upstreamUrl);
 
     const job = this.prefetchMissingChunks(item, upstreamUrl, startByte, logger)
@@ -491,7 +496,12 @@ export class StreamProxy {
         timeoutMs: this.config.requestTimeoutMs,
         maxRedirections: this.config.maxUpstreamRedirects
       });
+      if (response.statusCode === 429) {
+        await discardBody(response.body);
+        throw new Error('Upstream rate limited prefetch with status 429');
+      }
       if (![200, 206].includes(response.statusCode)) {
+        await discardBody(response.body);
         throw new Error(`Unexpected upstream status ${response.statusCode}`);
       }
       for await (const chunk of response.body) {

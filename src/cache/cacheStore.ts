@@ -199,18 +199,27 @@ export class CacheStore {
     this.db.prepare('UPDATE prefetch_jobs SET status = ?, updated_at = ?, last_error = ? WHERE item_id = ?').run(status, Date.now(), lastError ?? null, itemId);
   }
 
+  getPrefetchJob(itemId: number): PrefetchJob | undefined {
+    const row = this.db.prepare('SELECT item_id as itemId, url, status, created_at as createdAt, updated_at as updatedAt, last_error FROM prefetch_jobs WHERE item_id = ?').get(itemId) as PrefetchJobRow | undefined;
+    return row ? this.rowToPrefetchJob(row) : undefined;
+  }
+
   listPrefetchJobs(statuses?: PrefetchJob['status'][]): PrefetchJob[] {
     const rows = statuses?.length
       ? this.db.prepare(`SELECT item_id as itemId, url, status, created_at as createdAt, updated_at as updatedAt, last_error FROM prefetch_jobs WHERE status IN (${statuses.map(() => '?').join(',')}) ORDER BY updated_at ASC`).all(...statuses) as PrefetchJobRow[]
       : this.db.prepare('SELECT item_id as itemId, url, status, created_at as createdAt, updated_at as updatedAt, last_error FROM prefetch_jobs ORDER BY updated_at DESC').all() as PrefetchJobRow[];
-    return rows.map((row) => ({
+    return rows.map((row) => this.rowToPrefetchJob(row));
+  }
+
+  private rowToPrefetchJob(row: PrefetchJobRow): PrefetchJob {
+    return {
       itemId: row.itemId,
       url: row.url,
       status: row.status,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
       lastError: row.last_error ?? undefined
-    }));
+    };
   }
 
   close(): void {

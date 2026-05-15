@@ -60,9 +60,10 @@ Copy `.env.example` to `.env` and adjust:
 | `MIN_CACHEABLE_BYTES` | empty | Stream without caching when content is smaller |
 | `MAX_CACHEABLE_BYTES` | empty | Stream without caching when content is larger |
 | `PREFETCH_ENABLED` | `false` | Download missing chunks ahead of playback in the background |
-| `PREFETCH_CONCURRENCY` | `2` | Number of background chunk downloads per active item |
+| `PREFETCH_CONCURRENCY` | `1` | Number of background chunk downloads per active item |
 | `PREFETCH_START_AHEAD_CHUNKS` | `2` | How many chunks ahead of the current playback chunk to begin |
 | `PREFETCH_MAX_BYTES` | empty | Optional cap on bytes to prefetch after playback starts |
+| `PREFETCH_RETRY_AFTER_MS` | `600000` | Cooldown before retrying failed prefetch jobs |
 | `LOG_LEVEL` | `info` | Structured log level |
 
 ## API Examples
@@ -211,9 +212,10 @@ To download ahead of playback as quickly as the upstream and your server allow, 
 
 ```env
 PREFETCH_ENABLED=true
-PREFETCH_CONCURRENCY=4
+PREFETCH_CONCURRENCY=1
 PREFETCH_START_AHEAD_CHUNKS=1
 PREFETCH_MAX_BYTES=
+PREFETCH_RETRY_AFTER_MS=600000
 ```
 
 With this enabled, starting a stream creates a persistent prefetch job and begins background downloads of missing chunks. Leaving `PREFETCH_MAX_BYTES` empty allows prefetch to continue toward the end of the file, even if the player pauses, seeks, or closes the playback request. Already completed chunks survive restarts; unfinished jobs are resumed when the service starts again. Be careful with disk space: a single 100 GB movie can become a 100 GB cache item if prefetch is allowed to finish.

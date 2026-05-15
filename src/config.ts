@@ -29,9 +29,10 @@ const envSchema = z.object({
   TRUST_PROXY: boolish,
   LOG_LEVEL: z.string().default('info'),
   PREFETCH_ENABLED: boolish,
-  PREFETCH_CONCURRENCY: z.coerce.number().int().positive().default(2),
+  PREFETCH_CONCURRENCY: z.coerce.number().int().positive().default(1),
   PREFETCH_START_AHEAD_CHUNKS: z.coerce.number().int().min(0).default(2),
   PREFETCH_MAX_BYTES: optionalInt,
+  PREFETCH_RETRY_AFTER_MS: z.coerce.number().int().positive().default(10 * 60 * 1000),
   AIOSTREAMS_ADDON_URL: z.string().optional().default(''),
   ADDON_PUBLIC_BASE_URL: z.string().optional().default(''),
   ADDON_NAME: z.string().optional().default('Proxy Cache Wrapper'),
@@ -68,6 +69,7 @@ export type AppConfig = {
   prefetchConcurrency: number;
   prefetchStartAheadChunks: number;
   prefetchMaxBytes?: number;
+  prefetchRetryAfterMs: number;
 };
 
 export const config: AppConfig = {
@@ -96,7 +98,8 @@ export const config: AppConfig = {
   prefetchEnabled: env.PREFETCH_ENABLED,
   prefetchConcurrency: env.PREFETCH_CONCURRENCY,
   prefetchStartAheadChunks: env.PREFETCH_START_AHEAD_CHUNKS,
-  prefetchMaxBytes: env.PREFETCH_MAX_BYTES
+  prefetchMaxBytes: env.PREFETCH_MAX_BYTES,
+  prefetchRetryAfterMs: env.PREFETCH_RETRY_AFTER_MS
 };
 
 export function redactUrl(rawUrl: string): string {

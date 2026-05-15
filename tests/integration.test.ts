@@ -92,7 +92,8 @@ describe('stream proxy integration', () => {
       addonId: 'test.proxy-cache',
       prefetchEnabled: false,
       prefetchConcurrency: 2,
-      prefetchStartAheadChunks: 2
+      prefetchStartAheadChunks: 2,
+      prefetchRetryAfterMs: 600000
     };
     app = await buildServer(config);
   });
@@ -170,7 +171,8 @@ describe('stream proxy integration', () => {
       addonId: 'test.proxy-cache',
       prefetchEnabled: true,
       prefetchConcurrency: 1,
-      prefetchStartAheadChunks: 1
+      prefetchStartAheadChunks: 1,
+      prefetchRetryAfterMs: 600000
     });
     requests.length = 0;
 

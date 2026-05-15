@@ -71,7 +71,8 @@ describe('Stremio addon wrapper', () => {
       addonId: 'test.aiostreams.proxy',
       prefetchEnabled: false,
       prefetchConcurrency: 2,
-      prefetchStartAheadChunks: 2
+      prefetchStartAheadChunks: 2,
+      prefetchRetryAfterMs: 600000
     };
     app = await buildServer(config);
   });
