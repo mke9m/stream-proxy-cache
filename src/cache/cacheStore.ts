@@ -84,6 +84,10 @@ export class CacheStore {
     `);
   }
 
+  resetActiveStreams(): void {
+    this.db.prepare('UPDATE cache_items SET active_streams = 0').run();
+  }
+
   upsertItem(input: { urlHash: string; cacheKey: string; url: string }): CacheItem {
     const now = Date.now();
     this.db.prepare(`

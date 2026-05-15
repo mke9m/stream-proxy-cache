@@ -9,6 +9,7 @@ import { registerStremioAddonRoutes } from './addon/stremioAddon.js';
 
 export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
   const store = new CacheStore(config.databasePath);
+  store.resetActiveStreams();
   const fileCache = new FileCache(config.cacheDir, config.chunkSizeBytes, store);
   await fileCache.ensureDirs();
   const streamProxy = new StreamProxy(config, store, fileCache);
@@ -51,6 +52,8 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
   server.get('/cache/items', async () =>
     store.listItems().map((item) => ({
       ...item,
+      fileName: fileNameFromUrl(item.url),
+      urlHost: hostFromUrl(item.url),
       url: '[redacted]'
     }))
   );
@@ -66,4 +69,22 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
 
   streamProxy.resumePrefetchJobs(server.log);
   return server;
+}
+
+function fileNameFromUrl(rawUrl: string): string | undefined {
+  try {
+    const url = new URL(rawUrl);
+    const lastSegment = url.pathname.split('/').filter(Boolean).at(-1);
+    return lastSegment ? decodeURIComponent(lastSegment) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function hostFromUrl(rawUrl: string): string | undefined {
+  try {
+    return new URL(rawUrl).hostname;
+  } catch {
+    return undefined;
+  }
 }
