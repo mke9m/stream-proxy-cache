@@ -3,7 +3,7 @@ import { createWriteStream } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { Readable } from 'node:stream';
-import { request } from 'undici';
+import { Agent, Dispatcher, interceptors, request } from 'undici';
 import { AppConfig, redactUrl } from '../config.js';
 import { CacheItem, CacheStore } from '../cache/cacheStore.js';
 import { FileCache, cacheKeyForUrl } from '../cache/fileCache.js';
@@ -21,6 +21,8 @@ type UpstreamMetadata = {
   etag?: string;
   lastModified?: string;
 };
+
+const redirectDispatchers = new Map<number, Dispatcher.ComposedDispatcher>();
 
 export class StreamProxy {
   private readonly inflightChunks = new Map<string, Promise<void>>();
@@ -339,6 +341,15 @@ async function requestUpstream(
     headers,
     bodyTimeout: options.timeoutMs,
     headersTimeout: options.timeoutMs,
-    maxRedirections: options.maxRedirections
-  } as Parameters<typeof request>[1] & { maxRedirections: number });
+    dispatcher: redirectDispatcher(options.maxRedirections)
+  });
+}
+
+function redirectDispatcher(maxRedirections: number): Dispatcher.ComposedDispatcher {
+  const normalized = Math.max(0, maxRedirections);
+  const existing = redirectDispatchers.get(normalized);
+  if (existing) return existing;
+  const dispatcher = new Agent().compose(interceptors.redirect({ maxRedirections: normalized }));
+  redirectDispatchers.set(normalized, dispatcher);
+  return dispatcher;
 }

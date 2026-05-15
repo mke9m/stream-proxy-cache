@@ -12,6 +12,10 @@ const media = Buffer.alloc(256 * 1024, 0).map((_, index) => index % 251);
 function createRangeServer(delayMs = 0) {
   const requests: string[] = [];
   const server = http.createServer((req, res) => {
+    if (req.url === '/redirect.bin') {
+      res.writeHead(302, { location: `http://${req.headers.host}/media.bin` }).end();
+      return;
+    }
     if (req.url !== '/media.bin') {
       res.writeHead(404).end();
       return;
@@ -80,7 +84,7 @@ describe('stream proxy integration', () => {
       rateLimitMax: 1000,
       rateLimitWindow: '1 minute',
       requestTimeoutMs: 5000,
-      maxUpstreamRedirects: 0,
+      maxUpstreamRedirects: 3,
       trustProxy: false,
       logLevel: 'silent',
       allowPrivateUpstreamsForTesting: true,
@@ -139,5 +143,16 @@ describe('stream proxy integration', () => {
     });
     expect(response.statusCode).toBe(416);
     expect(response.headers['content-range']).toBe(`bytes */${media.length}`);
+  });
+
+  it('follows configured upstream redirects', async () => {
+    const redirectUrl = upstreamUrl.replace('/media.bin', '/redirect.bin');
+    const response = await app.inject({
+      method: 'GET',
+      url: `/stream?url=${encodeURIComponent(redirectUrl)}`,
+      headers: { range: 'bytes=0-1023' }
+    });
+    expect(response.statusCode).toBe(206);
+    expect(Buffer.compare(response.rawPayload, media.subarray(0, 1024))).toBe(0);
   });
 });
