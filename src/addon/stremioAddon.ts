@@ -1,6 +1,8 @@
 import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { request } from 'undici';
 import { AppConfig, redactUrl } from '../config.js';
+import { CacheStore } from '../cache/cacheStore.js';
+import { cacheKeyForUrl } from '../cache/fileCache.js';
 
 type StremioManifest = {
   id: string;
@@ -36,8 +38,8 @@ type RouteParams = {
   extra?: string;
 };
 
-export function registerStremioAddonRoutes(server: FastifyInstance, config: AppConfig): void {
-  const addon = new StremioAddon(config);
+export function registerStremioAddonRoutes(server: FastifyInstance, config: AppConfig, store: CacheStore): void {
+  const addon = new StremioAddon(config, store);
 
   server.get('/manifest.json', async (request, reply) => addon.manifest(request, reply));
   server.get('/stream/:type/:id.json', async (request: FastifyRequest<{ Params: RouteParams }>, reply) => addon.stream(request, reply));
@@ -45,7 +47,10 @@ export function registerStremioAddonRoutes(server: FastifyInstance, config: AppC
 }
 
 export class StremioAddon {
-  constructor(private readonly config: AppConfig) {}
+  constructor(
+    private readonly config: AppConfig,
+    private readonly store: CacheStore
+  ) {}
 
   async manifest(request: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> {
     const upstream = this.config.aiostreamsAddonUrl;
@@ -93,7 +98,10 @@ export class StremioAddon {
     }
 
     const publicBaseUrl = this.publicBaseUrl(request);
-    const streams = (upstreamResponse.streams ?? []).map((stream) => rewriteStream(stream, publicBaseUrl, this.config.authToken));
+    const streams = (upstreamResponse.streams ?? []).map((stream) => {
+      const cacheStatus = stream.url ? cacheStatusForUrl(this.store, stream.url) : undefined;
+      return rewriteStream(stream, publicBaseUrl, this.config.authToken, cacheStatus);
+    });
     return reply.header('access-control-allow-origin', '*').send({
       ...upstreamResponse,
       streams
@@ -107,7 +115,13 @@ export class StremioAddon {
   }
 }
 
-export function rewriteStream(stream: StremioStream, publicBaseUrl: string, authToken?: string): StremioStream {
+export type StreamCacheStatus = {
+  completed: boolean;
+  totalBytesCached: number;
+  contentLength?: number;
+};
+
+export function rewriteStream(stream: StremioStream, publicBaseUrl: string, authToken?: string, cacheStatus?: StreamCacheStatus): StremioStream {
   if (!stream.url || !isHttpUrl(stream.url)) return stream;
 
   const proxied = new URL('/stream', `${trimTrailingSlash(publicBaseUrl)}/`);
@@ -128,12 +142,54 @@ export function rewriteStream(stream: StremioStream, publicBaseUrl: string, auth
     };
   }
 
+  const badge = cacheBadge(cacheStatus);
   return {
     ...stream,
-    name: stream.name ? `${stream.name} + Cache` : 'Proxy Cache',
+    name: stream.name ? `${stream.name} + Cache${badge ? ` ${badge}` : ''}` : `Proxy Cache${badge ? ` ${badge}` : ''}`,
+    description: cacheDescription(stream.description, cacheStatus),
     url: proxied.toString(),
     behaviorHints
   };
+}
+
+function cacheStatusForUrl(store: CacheStore, upstreamUrl: string): StreamCacheStatus | undefined {
+  const { urlHash } = cacheKeyForUrl(upstreamUrl);
+  const item = store.getByHash(urlHash);
+  if (!item || item.totalBytesCached <= 0) return undefined;
+  return {
+    completed: item.completed,
+    totalBytesCached: item.totalBytesCached,
+    contentLength: item.contentLength
+  };
+}
+
+function cacheBadge(status?: StreamCacheStatus): string {
+  if (!status) return '';
+  if (status.completed) return '[CACHED]';
+  if (status.contentLength && status.contentLength > 0) {
+    const percent = Math.min(99, Math.floor((status.totalBytesCached / status.contentLength) * 100));
+    return `[CACHE ${percent}%]`;
+  }
+  return '[CACHE PARTIAL]';
+}
+
+function cacheDescription(description: unknown, status?: StreamCacheStatus): unknown {
+  if (!status) return description;
+  const line = status.completed
+    ? 'Cache: fully cached'
+    : `Cache: ${formatBytes(status.totalBytesCached)}${status.contentLength ? ` / ${formatBytes(status.contentLength)}` : ''}`;
+  return typeof description === 'string' && description.length > 0 ? `${line}\n${description}` : line;
+}
+
+function formatBytes(bytes: number): string {
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let value = bytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value >= 10 || unitIndex === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[unitIndex]}`;
 }
 
 function normalizeResources(resources?: StremioManifest['resources']): StremioManifest['resources'] {

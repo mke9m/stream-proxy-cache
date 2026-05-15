@@ -104,6 +104,7 @@ describe('Stremio addon wrapper', () => {
     expect(body.streams[1].infoHash).toBe('abc123');
     expect(body.streams[1].url).toBeUndefined();
   });
+
 });
 
 describe('rewriteStream', () => {
@@ -115,5 +116,16 @@ describe('rewriteStream', () => {
         Authorization: 'Bearer secret-token'
       }
     });
+  });
+
+  it('decorates streams with cache status', () => {
+    const stream = rewriteStream(
+      { name: 'TorBox', description: 'Original description', url: 'https://example.com/file.mkv' },
+      'http://localhost:3000',
+      undefined,
+      { completed: false, totalBytesCached: 50, contentLength: 100 }
+    );
+    expect(stream.name).toBe('TorBox + Cache [CACHE 50%]');
+    expect(stream.description).toContain('Cache: 50 B / 100 B');
   });
 });

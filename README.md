@@ -225,3 +225,12 @@ Check download jobs:
 ```bash
 curl http://127.0.0.1:3000/cache/prefetch/jobs
 ```
+
+When Stremio asks this wrapper for streams, entries that already have cached bytes are labeled in the stream list:
+
+```text
++ Cache [CACHE 42%]
++ Cache [CACHED]
+```
+
+The stream description also includes the cached byte count. Stremio may cache addon responses briefly, so refresh/reopen the item if the badge does not update immediately.

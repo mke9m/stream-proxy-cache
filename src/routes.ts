@@ -35,7 +35,7 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
   });
 
   server.get('/health', async () => ({ ok: true }));
-  registerStremioAddonRoutes(server, config);
+  registerStremioAddonRoutes(server, config, store);
 
   server.route({
     method: ['GET', 'HEAD'],
