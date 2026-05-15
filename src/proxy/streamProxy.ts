@@ -156,7 +156,7 @@ export class StreamProxy {
       const match = /^bytes \d+-\d+\/(\d+|\*)$/.exec(contentRange);
       if (match?.[1] && match[1] !== '*') metadata.contentLength = Number.parseInt(match[1], 10);
     }
-    response.body.destroy();
+    await discardBody(response.body);
     return metadata;
   }
 
@@ -551,4 +551,12 @@ async function endWritable(file: NodeJS.WritableStream): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     file.end((error?: Error | null) => (error ? reject(error) : resolve()));
   });
+}
+
+async function discardBody(body: { dump: (opts?: { limit: number }) => Promise<void> }): Promise<void> {
+  try {
+    await body.dump({ limit: 1024 * 1024 });
+  } catch {
+    // Best-effort cleanup for metadata probes.
+  }
 }

@@ -173,8 +173,16 @@ async function fetchJson<T>(url: string, timeoutMs: number): Promise<T> {
     bodyTimeout: timeoutMs
   });
   if (response.statusCode < 200 || response.statusCode >= 300) {
-    response.body.destroy();
+    await discardBody(response.body);
     throw new Error(`Upstream addon returned ${response.statusCode}`);
   }
   return (await response.body.json()) as T;
+}
+
+async function discardBody(body: { dump: (opts?: { limit: number }) => Promise<void> }): Promise<void> {
+  try {
+    await body.dump({ limit: 1024 * 1024 });
+  } catch {
+    // Best-effort cleanup for failed addon responses.
+  }
 }
