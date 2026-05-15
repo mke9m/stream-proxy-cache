@@ -1,8 +1,9 @@
 import { FastifyReply, FastifyRequest } from 'fastify';
 import { createWriteStream } from 'node:fs';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, rm } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { Readable } from 'node:stream';
+import { once } from 'node:events';
 import { Agent, Dispatcher, interceptors, request } from 'undici';
 import { AppConfig, redactUrl } from '../config.js';
 import { CacheItem, CacheStore } from '../cache/cacheStore.js';
@@ -190,6 +191,10 @@ export class StreamProxy {
           continue;
         }
       }
+      if (range.end > bounds.end) {
+        yield* this.fetchStreamAndCacheSpan(item, upstreamUrl, chunkIndex, range, request);
+        break;
+      }
       yield* this.fetchStreamAndCacheChunk(item, upstreamUrl, chunkIndex, desired, request);
     }
   }
@@ -284,12 +289,96 @@ export class StreamProxy {
         await new Promise<void>((resolve, reject) => {
           file.end((error?: Error | null) => (error ? reject(error) : resolve()));
         });
-        if (written > 0) {
+        if (written === expectedRangeSize(bounds)) {
           this.fileCache.recordChunk(item, chunkIndex, written);
+        } else {
+          await rm(path, { force: true });
         }
       } finally {
         resolveInflight();
         this.inflightChunks.delete(key);
+      }
+    }
+  }
+
+  private async *fetchStreamAndCacheSpan(
+    item: CacheItem,
+    upstreamUrl: string,
+    firstChunkIndex: number,
+    clientRange: ByteRange,
+    fastifyRequest: FastifyRequest
+  ): AsyncGenerator<Buffer> {
+    const firstBounds = this.fileCache.chunkBounds(firstChunkIndex, item.contentLength);
+    const upstreamRange = { start: firstBounds.start, end: clientRange.end };
+    const response = await requestUpstream(upstreamUrl, {
+      method: 'GET',
+      range: upstreamRange,
+      timeoutMs: this.config.requestTimeoutMs,
+      maxRedirections: this.config.maxUpstreamRedirects
+    });
+    if (![200, 206].includes(response.statusCode)) {
+      throw new Error(`Unexpected upstream status ${response.statusCode}`);
+    }
+
+    let offset = upstreamRange.start;
+    let currentChunkIndex = Math.floor(offset / this.config.chunkSizeBytes);
+    let currentBounds = this.fileCache.chunkBounds(currentChunkIndex, item.contentLength);
+    let currentPath = this.fileCache.chunkPath(item, currentChunkIndex);
+    await mkdir(dirname(currentPath), { recursive: true });
+    let currentFile = createWriteStream(currentPath);
+    let currentWritten = 0;
+
+    const finishCurrentChunk = async (complete: boolean) => {
+      await new Promise<void>((resolve, reject) => {
+        currentFile.end((error?: Error | null) => (error ? reject(error) : resolve()));
+      });
+      if (complete && currentWritten === expectedRangeSize(currentBounds)) {
+        this.fileCache.recordChunk(item, currentChunkIndex, currentWritten);
+      } else {
+        await rm(currentPath, { force: true });
+      }
+    };
+
+    try {
+      for await (const chunk of response.body) {
+        let buffer = Buffer.from(chunk);
+        proxyStats.bytesFetchedFromUpstream += buffer.length;
+
+        while (buffer.length > 0) {
+          const remainingInChunk = currentBounds.end - offset + 1;
+          const piece = buffer.subarray(0, remainingInChunk);
+          await writeWithBackpressure(currentFile, piece);
+          currentWritten += piece.length;
+
+          const pieceStart = offset;
+          const pieceEnd = offset + piece.length - 1;
+          offset += piece.length;
+          buffer = buffer.subarray(piece.length);
+
+          if (pieceEnd >= clientRange.start && pieceStart <= clientRange.end) {
+            const sliceStart = Math.max(0, clientRange.start - pieceStart);
+            const sliceEnd = Math.min(piece.length, clientRange.end - pieceStart + 1);
+            yield piece.subarray(sliceStart, sliceEnd);
+          }
+
+          if (offset > currentBounds.end) {
+            await finishCurrentChunk(true);
+            if (offset > clientRange.end) return;
+            currentChunkIndex += 1;
+            currentBounds = this.fileCache.chunkBounds(currentChunkIndex, item.contentLength);
+            currentPath = this.fileCache.chunkPath(item, currentChunkIndex);
+            await mkdir(dirname(currentPath), { recursive: true });
+            currentFile = createWriteStream(currentPath);
+            currentWritten = 0;
+          }
+        }
+      }
+    } catch (error) {
+      fastifyRequest.log.warn({ err: error, url: redactUrl(upstreamUrl) }, 'Upstream span streaming failed');
+      throw error;
+    } finally {
+      if (!currentFile.closed && !currentFile.destroyed) {
+        await finishCurrentChunk(offset > currentBounds.end);
       }
     }
   }
@@ -352,4 +441,14 @@ function redirectDispatcher(maxRedirections: number): Dispatcher.ComposedDispatc
   const dispatcher = new Agent().compose(interceptors.redirect({ maxRedirections: normalized }));
   redirectDispatchers.set(normalized, dispatcher);
   return dispatcher;
+}
+
+function expectedRangeSize(range: ByteRange): number {
+  return range.end - range.start + 1;
+}
+
+async function writeWithBackpressure(file: NodeJS.WritableStream, buffer: Buffer): Promise<void> {
+  if (!file.write(buffer)) {
+    await once(file, 'drain');
+  }
 }

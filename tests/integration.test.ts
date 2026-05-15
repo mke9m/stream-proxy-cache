@@ -135,6 +135,17 @@ describe('stream proxy integration', () => {
     expect(requests.at(-1)).toBe('bytes=131072-196607');
   });
 
+  it('uses one upstream request for continuous multi-chunk playback', async () => {
+    const response = await app.inject({
+      method: 'GET',
+      url: `/stream?url=${encodeURIComponent(upstreamUrl)}`,
+      headers: { range: 'bytes=0-131071' }
+    });
+    expect(response.statusCode).toBe(206);
+    expect(Buffer.compare(response.rawPayload, media.subarray(0, 131072))).toBe(0);
+    expect(requests.filter((range) => range !== 'full')).toEqual(['bytes=0-131071']);
+  });
+
   it('returns 416 for unsatisfiable ranges', async () => {
     const response = await app.inject({
       method: 'GET',

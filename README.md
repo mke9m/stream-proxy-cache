@@ -55,7 +55,7 @@ Copy `.env.example` to `.env` and adjust:
 | `AUTH_TOKEN` | empty | Optional bearer token for non-health endpoints |
 | `RATE_LIMIT_MAX` | `120` | Requests per rate window |
 | `RATE_LIMIT_WINDOW` | `1 minute` | Fastify rate-limit window |
-| `REQUEST_TIMEOUT_MS` | `30000` | Upstream request timeout |
+| `REQUEST_TIMEOUT_MS` | `120000` | Upstream inactivity timeout |
 | `MAX_UPSTREAM_REDIRECTS` | `3` | Redirect limit |
 | `MIN_CACHEABLE_BYTES` | empty | Stream without caching when content is smaller |
 | `MAX_CACHEABLE_BYTES` | empty | Stream without caching when content is larger |
@@ -191,3 +191,13 @@ npm test
 ```
 
 The integration tests run a local HTTP server with byte-range support and verify first playback, replay from cache, seeking to uncached ranges, and `416` behavior.
+
+## Large Stream Tuning
+
+For very large, high-bitrate files, use a longer upstream inactivity timeout:
+
+```env
+REQUEST_TIMEOUT_MS=120000
+```
+
+The proxy streams continuous multi-chunk playback through one upstream range request and writes cache chunks as bytes pass through. Small seek requests still fill individual cache chunks for replay.

@@ -22,7 +22,7 @@ const envSchema = z.object({
   AUTH_TOKEN: z.string().optional().default(''),
   RATE_LIMIT_MAX: z.coerce.number().int().positive().default(120),
   RATE_LIMIT_WINDOW: z.string().default('1 minute'),
-  REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
+  REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(120_000),
   MAX_UPSTREAM_REDIRECTS: z.coerce.number().int().min(0).default(3),
   MIN_CACHEABLE_BYTES: optionalInt,
   MAX_CACHEABLE_BYTES: optionalInt,
