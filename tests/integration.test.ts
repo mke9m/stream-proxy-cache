@@ -89,7 +89,10 @@ describe('stream proxy integration', () => {
       logLevel: 'silent',
       allowPrivateUpstreamsForTesting: true,
       addonName: 'Test Addon',
-      addonId: 'test.proxy-cache'
+      addonId: 'test.proxy-cache',
+      prefetchEnabled: false,
+      prefetchConcurrency: 2,
+      prefetchStartAheadChunks: 2
     };
     app = await buildServer(config);
   });
@@ -146,6 +149,44 @@ describe('stream proxy integration', () => {
     expect(requests.filter((range) => range !== 'full')).toEqual(['bytes=0-131071']);
   });
 
+  it('prefetches chunks ahead of playback when enabled', async () => {
+    await app.close();
+    app = await buildServer({
+      host: '127.0.0.1',
+      port: 0,
+      cacheDir: join(tempDir, 'prefetch-cache'),
+      databasePath: join(tempDir, 'prefetch.sqlite'),
+      maxCacheBytes: 1024 * 1024 * 100,
+      chunkSizeBytes: 64 * 1024,
+      allowlistHosts: [],
+      rateLimitMax: 1000,
+      rateLimitWindow: '1 minute',
+      requestTimeoutMs: 5000,
+      maxUpstreamRedirects: 3,
+      trustProxy: false,
+      logLevel: 'silent',
+      allowPrivateUpstreamsForTesting: true,
+      addonName: 'Test Addon',
+      addonId: 'test.proxy-cache',
+      prefetchEnabled: true,
+      prefetchConcurrency: 1,
+      prefetchStartAheadChunks: 1
+    });
+    requests.length = 0;
+
+    const target = `/stream?url=${encodeURIComponent(upstreamUrl)}`;
+    const first = await app.inject({ method: 'GET', url: target, headers: { range: 'bytes=0-1023' } });
+    expect(first.statusCode).toBe(206);
+
+    await waitFor(() => requests.includes('bytes=65536-131071'));
+    const chunkOneFetchesAfterPrefetch = requests.filter((range) => range === 'bytes=65536-131071').length;
+    const seek = await app.inject({ method: 'GET', url: target, headers: { range: 'bytes=65536-66559' } });
+
+    expect(seek.statusCode).toBe(206);
+    expect(Buffer.compare(seek.rawPayload, media.subarray(65536, 66560))).toBe(0);
+    expect(requests.filter((range) => range === 'bytes=65536-131071').length).toBe(chunkOneFetchesAfterPrefetch);
+  });
+
   it('returns 416 for unsatisfiable ranges', async () => {
     const response = await app.inject({
       method: 'GET',
@@ -167,3 +208,12 @@ describe('stream proxy integration', () => {
     expect(Buffer.compare(response.rawPayload, media.subarray(0, 1024))).toBe(0);
   });
 });
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  const deadline = Date.now() + 2000;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error('Timed out waiting for condition');
+}

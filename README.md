@@ -59,6 +59,10 @@ Copy `.env.example` to `.env` and adjust:
 | `MAX_UPSTREAM_REDIRECTS` | `3` | Redirect limit |
 | `MIN_CACHEABLE_BYTES` | empty | Stream without caching when content is smaller |
 | `MAX_CACHEABLE_BYTES` | empty | Stream without caching when content is larger |
+| `PREFETCH_ENABLED` | `false` | Download missing chunks ahead of playback in the background |
+| `PREFETCH_CONCURRENCY` | `2` | Number of background chunk downloads per active item |
+| `PREFETCH_START_AHEAD_CHUNKS` | `2` | How many chunks ahead of the current playback chunk to begin |
+| `PREFETCH_MAX_BYTES` | empty | Optional cap on bytes to prefetch after playback starts |
 | `LOG_LEVEL` | `info` | Structured log level |
 
 ## API Examples
@@ -201,3 +205,14 @@ REQUEST_TIMEOUT_MS=120000
 ```
 
 The proxy streams continuous multi-chunk playback through one upstream range request and writes cache chunks as bytes pass through. Small seek requests still fill individual cache chunks for replay.
+
+To download ahead of playback as quickly as the upstream and your server allow, enable background prefetch:
+
+```env
+PREFETCH_ENABLED=true
+PREFETCH_CONCURRENCY=4
+PREFETCH_START_AHEAD_CHUNKS=1
+PREFETCH_MAX_BYTES=
+```
+
+With this enabled, starting a stream begins background downloads of missing chunks ahead of the current playback position. Leaving `PREFETCH_MAX_BYTES` empty allows prefetch to continue toward the end of the file. Be careful with disk space: a single 100 GB movie can become a 100 GB cache item if playback starts and prefetch is allowed to finish.

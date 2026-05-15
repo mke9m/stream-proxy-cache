@@ -1,6 +1,6 @@
 import { FastifyReply, FastifyRequest } from 'fastify';
 import { createWriteStream } from 'node:fs';
-import { mkdir, rm } from 'node:fs/promises';
+import { mkdir, rename, rm } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { Readable } from 'node:stream';
 import { once } from 'node:events';
@@ -27,6 +27,7 @@ const redirectDispatchers = new Map<number, Dispatcher.ComposedDispatcher>();
 
 export class StreamProxy {
   private readonly inflightChunks = new Map<string, Promise<void>>();
+  private readonly prefetchJobs = new Map<number, Promise<void>>();
 
   constructor(
     private readonly config: AppConfig,
@@ -107,6 +108,7 @@ export class StreamProxy {
       const source = this.shouldCache(freshItem)
         ? this.streamRange(freshItem, normalizedUrl, resolved, request)
         : this.streamDirect(normalizedUrl, resolved, request);
+      this.startPrefetch(freshItem, normalizedUrl, resolved.start, request);
       const stream = Readable.from(this.streamWithAccounting(freshItem.id, source, request));
       return reply.send(stream);
     } catch (error) {
@@ -191,7 +193,7 @@ export class StreamProxy {
           continue;
         }
       }
-      if (range.end > bounds.end) {
+      if (!this.config.prefetchEnabled && range.end > bounds.end) {
         yield* this.fetchStreamAndCacheSpan(item, upstreamUrl, chunkIndex, range, request);
         break;
       }
@@ -403,6 +405,98 @@ export class StreamProxy {
     if (this.config.maxCacheableBytes !== undefined && item.contentLength > this.config.maxCacheableBytes) return false;
     return true;
   }
+
+  private startPrefetch(item: CacheItem, upstreamUrl: string, startByte: number, request: FastifyRequest): void {
+    if (!this.config.prefetchEnabled || !this.shouldCache(item) || item.contentLength === undefined) return;
+    if (this.prefetchJobs.has(item.id)) return;
+
+    const job = this.prefetchMissingChunks(item, upstreamUrl, startByte, request)
+      .catch((error) => request.log.warn({ err: error, url: redactUrl(upstreamUrl) }, 'Background prefetch failed'))
+      .finally(() => this.prefetchJobs.delete(item.id));
+    this.prefetchJobs.set(item.id, job);
+  }
+
+  private async prefetchMissingChunks(item: CacheItem, upstreamUrl: string, startByte: number, request: FastifyRequest): Promise<void> {
+    const contentLength = item.contentLength;
+    if (contentLength === undefined) return;
+
+    const firstChunk = Math.floor(startByte / this.config.chunkSizeBytes) + this.config.prefetchStartAheadChunks;
+    const maxEnd = this.config.prefetchMaxBytes === undefined
+      ? contentLength - 1
+      : Math.min(contentLength - 1, startByte + this.config.prefetchMaxBytes - 1);
+    const lastChunk = Math.floor(maxEnd / this.config.chunkSizeBytes);
+    let nextChunk = firstChunk;
+
+    const worker = async () => {
+      while (nextChunk <= lastChunk) {
+        const chunkIndex = nextChunk;
+        nextChunk += 1;
+        if (this.fileCache.hasChunk(item, chunkIndex)) continue;
+        await this.prefetchChunk(item, upstreamUrl, chunkIndex, request);
+      }
+    };
+
+    await Promise.all(
+      Array.from({ length: Math.min(this.config.prefetchConcurrency, Math.max(0, lastChunk - firstChunk + 1)) }, () => worker())
+    );
+  }
+
+  private async prefetchChunk(item: CacheItem, upstreamUrl: string, chunkIndex: number, fastifyRequest: FastifyRequest): Promise<void> {
+    if (this.fileCache.hasChunk(item, chunkIndex)) return;
+    const key = `${item.id}:${chunkIndex}`;
+    const existing = this.inflightChunks.get(key);
+    if (existing) {
+      await existing;
+      return;
+    }
+
+    let resolveInflight!: () => void;
+    const inflight = new Promise<void>((resolve) => {
+      resolveInflight = resolve;
+    });
+    this.inflightChunks.set(key, inflight);
+
+    const bounds = this.fileCache.chunkBounds(chunkIndex, item.contentLength);
+    const path = this.fileCache.chunkPath(item, chunkIndex);
+    const tempPath = `${path}.prefetch`;
+    await mkdir(dirname(path), { recursive: true });
+    const file = createWriteStream(tempPath);
+    let written = 0;
+
+    try {
+      const response = await requestUpstream(upstreamUrl, {
+        method: 'GET',
+        range: bounds,
+        timeoutMs: this.config.requestTimeoutMs,
+        maxRedirections: this.config.maxUpstreamRedirects
+      });
+      if (![200, 206].includes(response.statusCode)) {
+        throw new Error(`Unexpected upstream status ${response.statusCode}`);
+      }
+      for await (const chunk of response.body) {
+        const buffer = Buffer.from(chunk);
+        written += buffer.length;
+        proxyStats.bytesFetchedFromUpstream += buffer.length;
+        await writeWithBackpressure(file, buffer);
+      }
+      await endWritable(file);
+      if (written !== expectedRangeSize(bounds)) {
+        await rm(tempPath, { force: true });
+        return;
+      }
+      await rename(tempPath, path);
+      this.fileCache.recordChunk(item, chunkIndex, written);
+    } catch (error) {
+      fastifyRequest.log.warn({ err: error, url: redactUrl(upstreamUrl), chunkIndex }, 'Prefetch chunk failed');
+      await rm(tempPath, { force: true });
+    } finally {
+      if (!file.closed && !file.destroyed) {
+        file.destroy();
+      }
+      resolveInflight();
+      this.inflightChunks.delete(key);
+    }
+  }
 }
 
 function metadataFromHeaders(headers: Record<string, string | string[] | undefined>): UpstreamMetadata {
@@ -451,4 +545,10 @@ async function writeWithBackpressure(file: NodeJS.WritableStream, buffer: Buffer
   if (!file.write(buffer)) {
     await once(file, 'drain');
   }
+}
+
+async function endWritable(file: NodeJS.WritableStream): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    file.end((error?: Error | null) => (error ? reject(error) : resolve()));
+  });
 }

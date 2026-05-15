@@ -68,7 +68,10 @@ describe('Stremio addon wrapper', () => {
       aiostreamsAddonUrl: upstreamBaseUrl,
       addonPublicBaseUrl: 'http://proxy.local:3000',
       addonName: 'AIOStreams Proxy Cache',
-      addonId: 'test.aiostreams.proxy'
+      addonId: 'test.aiostreams.proxy',
+      prefetchEnabled: false,
+      prefetchConcurrency: 2,
+      prefetchStartAheadChunks: 2
     };
     app = await buildServer(config);
   });

@@ -28,6 +28,10 @@ const envSchema = z.object({
   MAX_CACHEABLE_BYTES: optionalInt,
   TRUST_PROXY: boolish,
   LOG_LEVEL: z.string().default('info'),
+  PREFETCH_ENABLED: boolish,
+  PREFETCH_CONCURRENCY: z.coerce.number().int().positive().default(2),
+  PREFETCH_START_AHEAD_CHUNKS: z.coerce.number().int().min(0).default(2),
+  PREFETCH_MAX_BYTES: optionalInt,
   AIOSTREAMS_ADDON_URL: z.string().optional().default(''),
   ADDON_PUBLIC_BASE_URL: z.string().optional().default(''),
   ADDON_NAME: z.string().optional().default('Proxy Cache Wrapper'),
@@ -60,6 +64,10 @@ export type AppConfig = {
   addonName: string;
   addonId: string;
   addonAuthToken?: string;
+  prefetchEnabled: boolean;
+  prefetchConcurrency: number;
+  prefetchStartAheadChunks: number;
+  prefetchMaxBytes?: number;
 };
 
 export const config: AppConfig = {
@@ -84,7 +92,11 @@ export const config: AppConfig = {
   addonPublicBaseUrl: env.ADDON_PUBLIC_BASE_URL || undefined,
   addonName: env.ADDON_NAME,
   addonId: env.ADDON_ID,
-  addonAuthToken: env.ADDON_AUTH_TOKEN || undefined
+  addonAuthToken: env.ADDON_AUTH_TOKEN || undefined,
+  prefetchEnabled: env.PREFETCH_ENABLED,
+  prefetchConcurrency: env.PREFETCH_CONCURRENCY,
+  prefetchStartAheadChunks: env.PREFETCH_START_AHEAD_CHUNKS,
+  prefetchMaxBytes: env.PREFETCH_MAX_BYTES
 };
 
 export function redactUrl(rawUrl: string): string {
